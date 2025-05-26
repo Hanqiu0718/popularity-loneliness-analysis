@@ -1,0 +1,537 @@
+---
+title: "popularity and loneliness Study 2a Data Processing"
+output: html_notebook
+
+This code tutorial does three things:
+  
+  1. Downloads experiment data files from AWS
+  2. Selects the incomplete files based on file size
+  3. Moves the incomplete files to a new folder
+  
+If you are unable to run this code for any reason, you can also do this manually (without using the code). You will use Cyberduck to download data and sort through incomplete files by looking at file sizes. To do this manually, follow the tutorial here: https://github.com/GoldenbergLab/lab-helper-codes/blob/main/guides/aws/s3-tasks/download.md
+---
+We use groundhog (https://groundhogr.com/) to manage our packages. Groundhog makes sure that our package versions are consistent with the current date. This way, everyone will be using packages from the same date to prevent any issues related to package versioning in future analyses. 
+
+To use groundhog, please: 
+(1) make sure that you have the latest version of R/Rstudio installed 
+(2) install RTools
+(3) make sure you are in a new R Session
+
+The R Version used to create this file is: `R version 4.3.0 (2023-04-21 ucrt)`. You can change this out with your own version of R if you are using this template to create your own analysis. If you are reproducing another person's analysis, please download the version of R used by the previous person to ensure a proper reproduction of the code.
+
+You can identify your version of R by typing `version` into the R Console
+
+You can switch your R version by pressing `Tools` > `Global Options` > `R Version`
+
+```{r libraries, include = FALSE}
+
+# if you need to install groundhog
+#if(!suppressWarnings(require(groundhog))){remotes::install_github('CredibilityLab/groundhog')}
+
+#call groundhog
+library("groundhog")
+
+
+# put all packages in and call groundhog
+pkgs <- c(
+    "aws.s3",
+    "tidyverse",'plyr', 'dplyr', 'broom.mixed', 'janitor', 'knitr', 
+    'lmerTest', 'jsonlite', 'digest', 'vtable', 'parallel', 'tm', 'tidyr'
+    )
+
+pkgs_all <- c(pkgs)
+
+# call groundhog. Change out the date for today's date (unless you are running an old analysis)
+groundhog.library(pkgs_all, "2025-04-09")
+```
+
+
+If this line of code does not run, you can alternatively download the data via Cyberduck and manually move the raw data objects into the data folder. Tutorial here: https://github.com/GoldenbergLab/lab-helper-codes/blob/main/guides/aws/s3-tasks/download.md
+
+paste the following code into the R Console to set AWS credentials. For AWS credentials, reach out to Amit or the lab manager.
+
+Sys.setenv("AWS_ACCESS_KEY_ID" = "mykey",
+       "AWS_SECRET_ACCESS_KEY" = "mysecretkey",
+        "AWS_DEFAULT_REGION" = "us-east-1")
+
+
+```{r download data and examine file sizes for cutoff point}
+
+## Download raw data objects and put them into the "data" folder
+
+#Provides a list of all of the buckets in the list 
+bucketlist("s3://task-data-raw/")
+
+#define your aws-s3 folder
+aws_folder ="popularity-loneliness-hanqiu-may-25/Study 2a/"
+
+dir.create("../data/raw", recursive = TRUE, showWarnings = FALSE)
+
+#download all the files from that folder to your raw library 
+system(paste0('aws s3 cp "s3://task-data-raw/', aws_folder, '" "../data/raw" --recursive'))
+```
+
+
+
+Process the data in the next few chunks. The final output of this data processing should be one long-format csv that contains one trial per line.
+
+```{r}
+input_dir = "../data/raw/data/"
+output_dir = "../data/raw/anonymized-data/"
+qualtrics_file = "../data/raw/data/agent-data/2021_fall_ART_popularity.csv"
+male_agents_path <- "../data/raw/data/agent-data/maleAgentsPopularity.json"
+female_agents_path <- "../data/raw/data/agent-data/femaleAgentsPopularity.json"
+```
+
+## data transfer
+```{r}
+options(Ncpus = parallel::detectCores())
+#+ anon, eval=F
+# 0 Anonymize Data so it can be shared (not run, skip to 1.) =========================
+## 0a. Load Raw -----------------------------------
+df <- 
+  list.files(input_dir,
+             pattern = "*.csv", 
+             full.names = T) %>%
+  map_df(~read_csv(., col_types = cols(.default = "c")))
+
+
+
+qualtrics_df <- read_csv(qualtrics_file) %>% 
+  select(
+         -ResponseId) %>% 
+  slice(-c(1:2))
+```
+
+## 0b. Anonymize -----------------------------------
+```{r}
+salt <- runif(min = 0, max = 9e15, n = 1)
+
+df_anon <- 
+  df %>%
+  mutate(participant_id = str_c(participant_id, salt)) %>% 
+  rowwise() %>% 
+  mutate(participant_id = digest(participant_id, algo = "sha1"))
+
+qualtrics_anon <- 
+  qualtrics_df %>%
+  mutate(prolific_id = str_c(prolific_id, salt)) %>% 
+  rowwise() %>% 
+  mutate(prolific_id = digest(prolific_id, algo = "sha1"))
+
+## 0c. Export -----------------------------------
+#write_json(df_anon, path = str_c(output_dir, "popularity_production.json")) # export
+#write_csv(qualtrics_anon, path = str_c(output_dir, "qtrcs_popularity_production.csv"))
+```
+
+
+#+ main, eval=T
+# 1 Main Cleaning (Start here) ==================================================
+### 1a. Clean Anon Data -----------------------------------
+```{r}
+df <- fromJSON(str_c(output_dir, "popularity_production.json"))
+#vtable(df)
+
+# drop extraneous info, parse photo num, change "NULL" to NA, fix empty list issue, improve column names
+
+df_clean <- 
+  df %>% 
+  filter(variableName == "allTrialResponses", # limit extra data
+         trial > 0) %>% 
+  select(-rt, -url, -trial_type, -stimulus, -internal_node_id, -(button_pressed:variableName)) %>% 
+  mutate(photo = parse_number(photo)) %>%
+  mutate_all(~ifelse(. == "NULL", NA_character_, .)) %>% # add NA's
+  arrange(participant_id, trial) %>%
+  janitor::clean_names() %>% 
+  select(participant_id, trial, agents_names, everything())
+
+## one row / trial
+#df_clean %>% View
+#vtable(df_clean)
+```
+
+
+# unnest response columns
+```{r}
+df_clean$agent_1_response = substr(df_clean$agent_1_response,1,nchar(df_clean$agent_1_response)-3)
+df_clean$agent_2_response = substr(df_clean$agent_2_response,1,nchar(df_clean$agent_2_response)-3)
+df_clean$agent_3_response = substr(df_clean$agent_3_response,1,nchar(df_clean$agent_3_response)-3)
+df_clean$agent_4_response = substr(df_clean$agent_4_response,1,nchar(df_clean$agent_4_response)-3)
+df_clean$agent_5_response = substr(df_clean$agent_5_response,1,nchar(df_clean$agent_5_response)-3)
+df_clean$agent_6_response = substr(df_clean$agent_6_response,1,nchar(df_clean$agent_6_response)-3)
+df_clean$kept_1_response = substr(df_clean$kept_1_response,1,nchar(df_clean$kept_1_response)-3)
+df_clean$kept_2_response = substr(df_clean$kept_2_response,1,nchar(df_clean$kept_2_response)-3)
+df_clean$kept_3_response = substr(df_clean$kept_3_response,1,nchar(df_clean$kept_3_response)-3)
+
+
+df_clean = separate(df_clean, "agent_1_response", paste("agent_1_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "agent_1_response _text", paste("agent_1_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, agent_1_response_text = "agent_1_response _text" )
+df_clean = dplyr::rename(df_clean, agent_1_response_num = "agent_1_response _num" )
+df_clean = dplyr::rename(df_clean, agent_1_response_liking = "agent_1_response _liking" )
+
+df_clean = separate(df_clean, "agent_2_response", paste("agent_2_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "agent_2_response _text", paste("agent_2_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, agent_2_response_text = "agent_2_response _text" )
+df_clean = dplyr::rename(df_clean, agent_2_response_num = "agent_2_response _num" )
+df_clean = dplyr::rename(df_clean, agent_2_response_liking = "agent_2_response _liking" )
+
+df_clean = separate(df_clean, "agent_3_response", paste("agent_3_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "agent_3_response _text", paste("agent_3_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, agent_3_response_text = "agent_3_response _text" )
+df_clean = dplyr::rename(df_clean, agent_3_response_num = "agent_3_response _num" )
+df_clean = dplyr::rename(df_clean, agent_3_response_liking = "agent_3_response _liking" )
+
+df_clean = separate(df_clean, "agent_4_response", paste("agent_4_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "agent_4_response _text", paste("agent_4_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, agent_4_response_text = "agent_4_response _text" )
+df_clean = dplyr::rename(df_clean, agent_4_response_num = "agent_4_response _num" )
+df_clean = dplyr::rename(df_clean, agent_4_response_liking = "agent_4_response _liking" )
+
+df_clean = separate(df_clean, "agent_5_response", paste("agent_5_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "agent_5_response _text", paste("agent_5_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, agent_5_response_text = "agent_5_response _text" )
+df_clean = dplyr::rename(df_clean, agent_5_response_num = "agent_5_response _num" )
+df_clean = dplyr::rename(df_clean, agent_5_response_liking = "agent_5_response _liking" )
+
+df_clean = separate(df_clean, "agent_6_response", paste("agent_6_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "agent_6_response _text", paste("agent_6_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, agent_6_response_text = "agent_6_response _text" )
+df_clean = dplyr::rename(df_clean, agent_6_response_num = "agent_6_response _num" )
+df_clean = dplyr::rename(df_clean, agent_6_response_liking = "agent_6_response _liking" )
+
+df_clean = separate(df_clean, "kept_1_response", paste("kept_1_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "kept_1_response _text", paste("kept_1_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, kept_1_response_text = "kept_1_response _text" )
+df_clean = dplyr::rename(df_clean, kept_1_response_num = "kept_1_response _num" )
+df_clean = dplyr::rename(df_clean, kept_1_response_liking = "kept_1_response _liking" )
+
+df_clean = separate(df_clean, "kept_2_response", paste("kept_2_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "kept_2_response _text", paste("kept_2_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, kept_2_response_text = "kept_2_response _text" )
+df_clean = dplyr::rename(df_clean, kept_2_response_num = "kept_2_response _num" )
+df_clean = dplyr::rename(df_clean, kept_2_response_liking = "kept_2_response _liking" )
+
+df_clean = separate(df_clean, "kept_3_response", paste("kept_3_response", into = c("_text", "_liking")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = separate(df_clean, "kept_3_response _text", paste("kept_3_response", into = c("_text", "_num")),  ",\\s*(?=[^,]+$)", extra="drop")
+df_clean = dplyr::rename(df_clean, kept_3_response_text = "kept_3_response _text" )
+df_clean = dplyr::rename(df_clean, kept_3_response_num = "kept_3_response _num" )
+df_clean = dplyr::rename(df_clean, kept_3_response_liking = "kept_3_response _liking" )
+
+df_trial <- 
+  df_clean %>%
+  select(-trial_index, -time_elapsed, -fixation_time, -condition)
+
+#View(df_trial)
+#vtable(df_trial) ## one row / trial
+```
+
+## import actual agent data for referencing
+```{r}
+clean_agents <- function(df) {
+  df %>%
+    as_tibble() %>%
+    pivot_longer(cols = everything(), names_to = "name", values_to = "value") %>%
+    dplyr::group_by(name) %>% 
+    dplyr::mutate(x = TRUE, # agents have the photo numbers ordered
+           photo = cumsum(x)) %>%
+    dplyr::select(-x) %>% 
+    dplyr::mutate(value = map(value, ~ set_names(.x, c("agent_response", "agent_rating", "coord1")))) %>%
+    unnest_wider(value) %>%
+    dplyr::mutate(
+      agent_rating = as.integer(agent_rating)
+    )
+}
+
+male_agents <- fromJSON(male_agents_path) %>% clean_agents() %>% dplyr::mutate(trial_gender = "male")
+female_agents <- fromJSON(female_agents_path) %>% clean_agents() %>% mutate(trial_gender = "female")
+all_agents <- bind_rows(male_agents, female_agents)
+#vtable(all_agents)
+```
+
+### 1b. Clean Anon Qualtrics Data -----------------------------------
+```{r}
+qualtrics_anon$big5_6 <- recode(qualtrics_anon$big5_6, '1' = 7,'2' = 6,'3' =5,'4'=4, '5' = 3, '6' = 2, '7' = 1)
+qualtrics_anon$big5_2 <- recode(qualtrics_anon$big5_2, '1' = 7,'2' = 6,'3' =5,'4'=4, '5' = 3, '6' = 2, '7' = 1)
+qualtrics_anon$big5_8 <- recode(qualtrics_anon$big5_8, '1' = 7,'2' = 6,'3' =5,'4'=4, '5' = 3, '6' = 2, '7' = 1)
+qualtrics_anon$big5_4 <- recode(qualtrics_anon$big5_4, '1' = 7,'2' = 6,'3' =5,'4'=4, '5' = 3, '6' = 2, '7' = 1)
+qualtrics_anon$big5_10 <- recode(qualtrics_anon$big5_10, '1' = 7,'2' = 6,'3' =5,'4'=4, '5' = 3, '6' = 2, '7' = 1)
+
+## depression: 0 = rarely or none of the time, 3 = most or all of the time, positive item reverse, continuous sum, higher more depressive symptoms
+qualtrics_anon$Q86_5 <- recode(qualtrics_anon$Q86_5, '1' = 3, '2' = 2, '3' = 1, '4' = 0) ## reverse
+qualtrics_anon$Q86_8 <- recode(qualtrics_anon$Q86_8, '1' = 3, '2' = 2, '3' = 1, '4' = 0) ## reverse
+qualtrics_anon$Q86_1 <- recode(qualtrics_anon$Q86_1, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_2 <- recode(qualtrics_anon$Q86_2, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_3 <- recode(qualtrics_anon$Q86_3, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_4 <- recode(qualtrics_anon$Q86_4, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_6 <- recode(qualtrics_anon$Q86_6, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_7 <- recode(qualtrics_anon$Q86_7, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_9 <- recode(qualtrics_anon$Q86_9, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+qualtrics_anon$Q86_10 <- recode(qualtrics_anon$Q86_10, '1' = 0, '2' = 1, '3' = 2, '4' = 3)
+
+## SIAS-6: 0 = not at all, 4 = extremely, continuous sum, higher more social anxiety
+qualtrics_anon$Q88_1 <- recode(qualtrics_anon$Q88_1, '1' = 0, '2' = 1, '3' = 2, '4' = 3, '5' = 4)
+qualtrics_anon$Q88_2 <- recode(qualtrics_anon$Q88_2, '1' = 0, '2' = 1, '3' = 2, '4' = 3, '5' = 4)
+qualtrics_anon$Q88_3 <- recode(qualtrics_anon$Q88_3, '1' = 0, '2' = 1, '3' = 2, '4' = 3, '5' = 4)
+qualtrics_anon$Q88_5 <- recode(qualtrics_anon$Q88_5, '1' = 0, '2' = 1, '3' = 2, '4' = 3, '5' = 4)
+qualtrics_anon$Q88_6 <- recode(qualtrics_anon$Q88_6, '1' = 0, '2' = 1, '3' = 2, '4' = 3, '5' = 4)
+qualtrics_anon$Q88_7 <- recode(qualtrics_anon$Q88_7, '1' = 0, '2' = 1, '3' = 2, '4' = 3, '5' = 4)
+
+qualtrics_anon$Q82_1 <- recode(qualtrics_anon$Q82_1, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+qualtrics_anon$Q82_2 <- recode(qualtrics_anon$Q82_2, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+qualtrics_anon$Q82_3 <- recode(qualtrics_anon$Q82_3, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+qualtrics_anon$Q82_4 <- recode(qualtrics_anon$Q82_4, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+qualtrics_anon$Q82_5 <- recode(qualtrics_anon$Q82_5, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+qualtrics_anon$Q84_1 <- recode(qualtrics_anon$Q84_1, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+qualtrics_anon$Q84_2 <- recode(qualtrics_anon$Q84_2, '47' = 1, '48' = 2, '49' = 3, '50' = 4, '51' = 5, '52' = 6, '53' = 7)
+
+qualtrics_anon[,11:90] <- sapply(qualtrics_anon[,11:90],as.numeric)
+
+
+qualtrics_anon = qualtrics_anon %>%
+  mutate(pop_agent_popularity = Q98_1,
+         nonpop_agent_popularity = Q105_1,
+         pop_agent_positivity = Q98_2,
+         nonpop_agent_positivity = Q105_2,
+         pop_agent_interesting = Q98_3,
+         nonpop_agent_interesting = Q105_3,
+         pop_agent_like = Q98_4,
+         nonpop_agent_like = Q105_4,
+         pop_agent_ratingsimilar = Q98_5,
+         nonpop_agent_ratingsimilar = Q105_5,
+         pop_agent_likesimilar = Q98_6,
+         nonpop_agent_likesimilar = Q105_6)
+
+
+
+qualtrics_anon = qualtrics_anon %>%
+  mutate(popularity_selfpopular = Q99_1,
+         popularity_attractpopular = Q99_2,
+         popularity_interetpopular = Q99_3,
+         popularity_wishpopular = Q99_4,
+         popularity_commentpopular = Q99_5,
+         popularity_commentinteresting = Q99_6,
+         popularity_ratingappealing = Q99_7)
+
+
+qualtrics_anon = qualtrics_anon %>%
+  mutate(loneliness_score = (loneliness_1 + loneliness_2 + loneliness_3 + loneliness_4 + loneliness_5 + loneliness_6 + loneliness_7 + loneliness_8 + loneliness_9 + loneliness_10 + loneliness_11 + loneliness_12 + loneliness_13 + loneliness_14 + loneliness_15 + loneliness_16 + loneliness_17 + loneliness_18 + loneliness_19 + loneliness_20)/20,
+         popularity_general_score = (Q99_1 + Q99_2 + Q99_3 + Q99_4 + Q99_5 + Q99_6 + Q99_7)/7,
+         select_feelgood = Q82_1,
+         select_agreewith = Q82_2,
+         select_newinterpre = Q82_3,
+         select_creative = Q82_4,
+         select_expressemotion = Q82_5,
+         surround_same_emo_reaction = Q84_1,
+         surround_diff_emo_reaction = Q84_2,
+         extraversion = (big5_1 + big5_6)/2,
+         agreeableness = (big5_2 + big5_7)/2,
+         conscientiousness = (big5_3 + big5_8)/2,
+         neuroticism = (big5_4 + big5_9)/2,
+         openness = (big5_10 + big5_5)/2,
+         depression = (Q86_1+Q86_2+Q86_3+Q86_4+Q86_5+Q86_6+Q86_7+Q86_8+Q86_9+Q86_10)/10,
+         social_anxiety = (Q88_1 + Q88_2 + Q88_3 + Q88_5 + Q88_6 + Q88_7)/6)
+    
+#write_csv(qualtrics_anon, path = str_c(output_dir, "qtrcs_popularity_production.csv"))    
+
+education_labels <- c("Less than high school", "High school", "Some college", "Associate", "Bachelor", "Graduate")
+income_labels <- c("< 30k", "30 - 50k", "50 - 75k", "75 - 100k", "100 - 200k", "> 200k")
+race_labels <- c("Black", "Hispanic", "White", "Asian", "Other")
+ideo_labels <- c("Strong liberal", "Moderate liberal", "Slightly liberal", "Neutral", "Slightly conservative", "Moderately convservative", "Strong conservative")
+pp_labels <- c("Republican", "Democrat", "Independent", "Other")
+gender_labels <- c("female", "male", "other")
+
+qt_df <- read_csv(str_c(output_dir, "qtrcs_popularity_production.csv"), col_names = T)
+#vtable(qt_df)
+```
+
+```{r}
+
+clean_qualtrics <- function(df){
+  df %>% 
+    mutate(
+           .loneliness = rowMeans(select(., starts_with("lonel")), na.rm = T), # items for loneliness score
+           .authenticity = rowMeans(select(., starts_with("authen")), na.rm = T), # items for authenticity score
+           education = factor(education, labels = education_labels,level = 1:6),
+           income = factor(income, labels = income_labels, levels = 1:6, nmax = 6),
+           race_eth = factor(race_eth, labels = race_labels, levels = 1:5),
+           political_ideology = factor(political_ideology, levels = 1:7, labels = ideo_labels),
+           gender = as.character(factor(gender, labels = gender_labels, levels = 1:3, nmax = 3))
+    ) %>%
+    select(-starts_with("lonel"), -starts_with("authen")) %>% # drop original item vars
+    mutate(lonely_cat = ifelse(.loneliness > median(.loneliness), "low in loneliness", "high in loneliness")) %>% 
+    rowwise() %>% 
+    mutate(extraversion = mean(c(big5_1, (8 - big5_6))), # big 5 measures
+           agreeableness = mean(c((8 - big5_2), big5_7)),
+           conscientiousness = mean(c(big5_3, (8 - big5_8))),
+           emotional_stable = mean(c((8 - big5_4), big5_9)),
+           openness = mean(c(big5_5, (8 - big5_10))))
+}
+
+qt_clean <- 
+  qt_df %>%
+  dplyr::rename(participant_id = prolific_id) %>% 
+  select(-c(StartDate:UserLanguage, starts_with("Q"))) %>%
+  clean_qualtrics()
+
+```
+
+### 1c Agent Personality Traits -----------------------------------
+```{r}
+agent_profiles_raw <- read.csv("../data/raw/data/agent-data/agent-profiles-art.csv")
+#vtable(agent_profiles_raw)
+
+agent_profiles = agent_profiles_raw %>% 
+  select(man, woman, 
+         loneliness:big5_10, political_ideology:income) %>% 
+  clean_qualtrics() %>% 
+  dplyr::rename_all(function(x){paste0("agent_", x)}) %>% 
+  pivot_longer(cols = c(agent_man, agent_woman), 
+               values_to = "agents_names", 
+               names_to = "agent_id_gender") %>% 
+  mutate(agent_id_gender = ifelse(agent_id_gender == "agent_man", "male", "female")) %>% 
+  select(agents_names, agent_latent_gender = agent_gender, everything())
+
+#View(agent_profiles)
+# vtable(agent_profiles)
+```
+
+## drop low quality participants
+```{r}
+single_word_responders <- # prepare to drop people who use single word responses
+df_trial %>% 
+  dplyr::select(participant_id, trial, subject_response) %>% 
+  dplyr::mutate(n_words = lengths(strsplit(subject_response, "\\W+"))) %>%
+  filter(n_words == 1) %>% 
+  dplyr::count(participant_id, sort = T) %>% 
+  filter(n >= 15) %>% 
+  pull(participant_id)
+
+
+missing_data_participants <- 
+df_trial %>% # missing data respondents
+  select(participant_id, trial, subject_response) %>%
+  pivot_wider(id_cols = participant_id, names_from = trial, values_from = subject_response) %>%
+  filter(is.na(`30`)) %>% 
+  pull(participant_id)
+
+```
+
+## 1d Combine Data -----------------------------------
+```{r}
+find_distance <- function(x, y){
+  dist <- abs(`-`(x, y))
+  
+  return(dist)
+}
+
+df_trial_clean <- df_trial %>% 
+  filter(!participant_id %in% c(single_word_responders)) %>% 
+  inner_join(qt_clean)
+# vtable(df_trial)
+
+n_distinct(df_trial$participant_id) # n participants
+n_distinct(df_trial_clean$participant_id) # n completers
+df_trial <- df_trial_clean
+
+cols_num <- c("subject_rating","agent_1_response_num","agent_2_response_num","agent_3_response_num","agent_4_response_num","agent_5_response_num","agent_6_response_num","agent_1_response_liking","agent_2_response_liking","agent_3_response_liking","agent_4_response_liking","agent_5_response_liking","agent_6_response_liking","kept_1_response_num","kept_2_response_num","kept_3_response_num","kept_1_response_liking","kept_2_response_liking","kept_3_response_liking")
+df_trial[cols_num] <- sapply(df_trial[cols_num],as.integer)
+
+df_agent <- 
+  df_trial %>%
+  dplyr::mutate(agents_names=strsplit(agents_names, ",")) %>% 
+  tidyr::unnest(agents_names)%>%
+  dplyr::rowwise() %>% 
+  dplyr::mutate(kept = agents_names %in% c(kept_1_name, kept_2_name, kept_3_name),
+         kept_label = factor(kept, 
+                             levels = c(F, T),
+                             labels = c("Eliminated Agents", "Kept Agents")),
+         trial_gender = ifelse(sum(c(kept_1_name, kept_2_name, kept_3_name) %in% male_agents$name) == 3, "male", "female")) %>%
+  dplyr::select(-matches("_name$|_text$|_num$"))%>% 
+  dplyr::left_join(agent_profiles, by = c("agents_names", "trial_gender" = "agent_id_gender")) %>% # import agent qualtrics
+  dplyr::left_join(all_agents, by = c("agents_names" = "name",  # import agent ratings
+                               "photo" = "photo", 
+                               "trial_gender" = "trial_gender")) %>% 
+  dplyr::mutate(dif = as.integer(agent_rating) - subject_rating) %>% 
+  dplyr::group_by(participant_id, photo) %>% 
+  dplyr::mutate(photo_nice = ifelse(subject_rating < 0, F, T)) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::select(participant_id:agents_names, kept, photo_nice, agent_rating, agent_response, error_counter,everything()) %>% 
+  dplyr::mutate(rating_dist = map2_int(agent_rating, subject_rating, find_distance))
+
+
+df_agent <- df_agent %>% 
+  mutate(kept = relevel(factor(kept), "TRUE")) %>% 
+  group_by(participant_id, trial) %>% 
+  mutate(avg_trial_distance = mean(rating_dist)) %>% 
+  ungroup()
+# vtable(df_agent) ## one row / agent
+
+```
+
+```{r}
+df_trial_w_agent_profiles <- 
+df_trial %>%
+  dplyr::mutate(agents_names=strsplit(agents_names, ",")) %>% 
+  unnest(agents_names)%>%
+  dplyr::mutate(match_id = str_c(gender, agents_names))%>% 
+  dplyr::group_by(participant_id, trial) %>% 
+  dplyr::mutate(agent_number = row_number()) %>% 
+  left_join(agent_profiles %>% 
+              dplyr::mutate(match_id= str_c(agent_id_gender, agents_names)),
+            by = c("match_id","agents_names")) %>%
+  ungroup()
+
+df_trial_colnames <- colnames(df_trial)
+agent_profiles_colnames <- colnames(agent_profiles %>% select(-agent_id_gender))
+
+df_trial_w_agent_profiles <- 
+  df_trial_w_agent_profiles %>%
+    pivot_wider(id_cols = c(participant_id,trial),
+                names_from = agent_number,
+                values_from = c(agents_names,agent_big5_1,agent_big5_2,agent_big5_3,agent_big5_4,agent_big5_5,agent_big5_6,agent_big5_7,agent_big5_8,agent_big5_9,agent_big5_10,agent_political_ideology,agent_political_party,agent_political_party_4_TEXT,agent_age,agent_us_citizen,agent_us_citizen_2_TEXT,agent_us_born,agent_us_years,agent_us_region,agent_us_region_3_TEXT,agent_race_eth,agent_education,agent_income,agent_.loneliness,agent_.authenticity,agent_lonely_cat,agent_extraversion,agent_agreeableness,agent_conscientiousness,agent_emotional_stable,agent_openness))%>%
+  dplyr::mutate(df_trial)
+
+
+#agent_profiles %>% select(agents_names, agent_id_gender, agent_big5)
+# df_agent %>% select(agents_names, trial_gender, agent_big5)
+
+rating_df <- bind_rows(
+  transmute(df_agent, rating = agent_rating, response = agent_response, type = "agent"),
+  transmute(df_trial, rating = subject_rating, response = subject_response, type = "participant")
+)
+
+## 1e Photo Ratings
+photo_agent_df <- 
+  df_agent %>% 
+  distinct(participant_id, trial, photo)
+
+all_agents$...4 = NULL
+df_agent$...4 = NULL
+
+
+```
+
+# export
+```{r}
+#write_rds(df_trial, "anonymized-data/df_trial.rds")
+#write_rds(df_agent, "anonymized-data/df_agent.rds")
+#write_csv(df_agent, "anonymized-data/df_agent.csv")
+#write.csv(all_agents, "anonymized-data/all_agents.csv")
+#df_trial_w_agent_profiles %>% 
+#  write_rds("anonymized-data/df_trial_w_agent_profiles.rds")
+```
+
+# add agent-liking
+```{r}
+
+df_agent <- read.csv("../data/raw/anonymized-data/df_agent.csv")
+df_agent$agent_number = seq(1:6)
+df_agent = df_agent %>%
+  #mutate(agent_number = seq(1:6))%>%
+  dplyr::mutate(agent_liking = ifelse(agent_number ==1, agent_1_response_liking, ifelse(agent_number ==2, agent_2_response_liking,ifelse(agent_number ==3, agent_3_response_liking,ifelse(agent_number ==4, agent_4_response_liking,ifelse(agent_number ==5, agent_5_response_liking,ifelse(agent_number ==6, agent_6_response_liking, NA)))))))%>%
+  dplyr::select(-agent_number, -agent_1_response_liking, -agent_2_response_liking, -agent_3_response_liking, -agent_4_response_liking, -agent_5_response_liking, -agent_6_response_liking)
+
+#write_rds(df_agent, "anonymized-data/df_agent.rds")
+#write_csv(df_agent, "anonymized-data/df_agent.csv")
+```

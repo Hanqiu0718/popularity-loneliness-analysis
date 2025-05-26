@@ -1,0 +1,551 @@
+---
+title: "popularity and loneliness Study 2a Data Analysis"
+output: html_notebook
+---
+
+We use groundhog (https://groundhogr.com/) to manage our packages. Groundhog makes sure that our package versions are consistent with the current date. This way, everyone will be using packages from the same date to prevent any issues related to package versioning in future analyses. 
+
+To use groundhog, please: 
+(1) make sure that you have the latest version of R/ RStudio installed; 
+(2) install RTools
+(3) make sure you are in a new R Session
+
+
+The R Version used to create this file is: `R version 4.3.0 (2023-04-21 ucrt)`. You can change this out with your own version of R if you are using this template to create your own analysis. If you are reproducing another person's analysis, please download the version of R used by the previous person to ensure a proper reproduction of the code.
+
+You can identify your version of R by typing `version` into the R Console
+
+You can switch your R version by pressing `Tools` > `Global Options` > `R Version`
+
+
+```{r download packages and format csv to prepare for analysis}
+
+# if you need to install groundhog
+#if(!suppressWarnings(require(groundhog))){remotes::install_github('CredibilityLab/groundhog')}
+
+#call groundhog
+library("groundhog")
+
+
+
+# put all packages in and call groundhog
+pkgs <- c('Rmisc', 'corrplot', 'tidyverse', 'broom.mixed', 'knitr', 'lmerTest', 'Hmisc', 'psych', 'simr', 'future', 'glue', 'sjmisc', 'quanteda', 'wordcloud', 'car', 'DeclareDesign', 'tidytext', 'mediation', 'hrbrthemes', 'MuMIn'
+    )
+
+pkgs_all <- c(pkgs)
+
+# call groundhog. Change out the date for today's date (unless you are running an old analysis)
+groundhog.library(pkgs_all, "2025-04-09")
+
+#load data
+input_dir = "../data/raw/data/"
+output_dir = "../data/raw/anonymized-data/"
+# df_trial <- read_rds("anonymized-data/df_trial.rds")
+df_trial <- read_rds("../data/raw/anonymized-data/df_trial_w_agent_profiles.rds")
+nrow(df_trial)/30
+d <- read.csv("../data/raw/anonymized-data/df_agent.csv")
+all_agents <- read_csv("../data/raw/anonymized-data/all_agents.csv")
+qualtrics <- read.csv("../data/raw/anonymized-data/qtrcs_popularity_production.csv")
+
+#modify variables
+d$kept = factor(d$kept, labels =c ("eliminated", "kept"))
+d$photo_nice = factor(d$photo_nice, labels = c("negative rating", "positive rating"))
+d$absDif = abs (d$subject_rating-d$agent_rating)
+d$trial = as.numeric(d$trial)
+df_trial$trial=as.numeric(df_trial$trial)
+d$dif = d$subject_rating-d$agent_rating
+d$lonely_cat=factor(d$lonely_cat)
+d$lonely_cat=relevel(d$lonely_cat,"low in loneliness")
+d$.loneliness = 5-d$.loneliness
+
+
+#functions
+tidy. <- function(df) {
+  df %>% 
+    tidy() %>% 
+    mutate_if(is.numeric,~round(., 3))
+}
+
+barGraph = function (data, outcome,group1,group2,title, xtitle,ytitle){
+  dfc=summarySE(data, measurevar=outcome,
+                groupvars=c(group1,group2), na.rm = T)
+  dfc$high = dfc[,4]+dfc[,7]
+  dfc$low = dfc[,4]-dfc[,7]
+  pd <- position_dodge(0)
+  ggplot(dfc, aes_string(x=group1, y=outcome, fill = group2)) +
+      geom_bar(position=position_dodge(), stat="identity", colour="black" ) +
+      labs(title="")+
+      guides(fill=guide_legend(title=NULL))+
+      theme_bw()+
+      theme(plot.title = element_text(hjust=0.5,size = rel(1.5)),
+            axis.title.y = element_text(face="bold",  size=14),
+            axis.text.x  = element_text( vjust=0.5, size=18),
+            axis.text.y  = element_text( vjust=0.5, size=12),
+            axis.title.x = element_text( vjust=0.5, size=18)) +
+    #coord_cartesian(ylim=c(3, 6)) +
+    labs(title = title,
+         x = xtitle, 
+         y = ytitle)+
+    geom_errorbar(aes(ymin=low, ymax=high),
+                    width=.1,position=position_dodge(.9))
+}
+
+barGraph2 = function (data, outcome,group1,group2,title, xtitle,ytitle){
+  dfc=summarySE(data, measurevar=outcome,
+                groupvars=c(group1,group2), na.rm = T)
+  dfc$high = dfc[,4]+dfc[,7]
+  dfc$low = dfc[,4]-dfc[,7]
+  pd <- position_dodge(0)
+  ggplot(dfc, aes_string(x=group1, y=outcome, fill = group2)) +
+      geom_bar(position=position_dodge(), stat="identity", colour="black" ) +
+      labs(title="")+
+      guides(fill=guide_legend(title=NULL))+
+      theme_bw()+
+      coord_cartesian(ylim = c(200, 225)) + 
+      theme(plot.title = element_text(hjust=0.5,size = rel(1.5)),
+            axis.title.y = element_text(face="bold",  size=14),
+            axis.text.x  = element_text( vjust=0.5, size=18),
+            axis.text.y  = element_text( vjust=0.5, size=12),
+            axis.title.x = element_text( vjust=0.5, size=18)) +
+    #coord_cartesian(ylim=c(3, 6)) +
+    labs(title = title,
+         x = xtitle, 
+         y = ytitle)+
+    geom_errorbar(aes(ymin=low, ymax=high),
+                    width=.1,position=position_dodge(.9))
+}
+
+lineGraph = function (data, outcome,group1,group2,title, xtitle,ytitle){
+  dfc=summarySE(data, measurevar=outcome,
+                groupvars=c(group1,group2), na.rm = T)
+  print(dfc)
+  dfc$high = dfc[,4]+dfc[,7]
+  dfc$low = dfc[,4]-dfc[,7]
+  pd <- position_dodge(0)
+  ggplot(dfc,aes_string(x=group2, y=outcome ,fill = group1, colour =group1))+
+    geom_errorbar(aes(ymin=low, ymax=high), width=.1)+
+    geom_line( aes_string(linetype= group1, group=group1),size = .5)+
+    #facet_wrap(as.formula(paste("~", group1)),nrow=2)+
+    geom_point()+
+    theme_ipsum() +
+    scale_color_manual(values=c("#69b3a2", "#404080")) +
+    theme(plot.title = element_text(hjust=0.5,size = rel(1.5)),
+          axis.title.y = element_text(size=14),
+          axis.text.x  = element_text( vjust=0.5, size=14),
+          axis.text.y  = element_text( vjust=0.5, size=12),
+          axis.title.x = element_text( vjust=0.5, size=14)) +
+    labs(title = title,
+          x = xtitle, 
+          y = ytitle)
+}
+
+
+# add age category
+d = d %>%
+  mutate(age = as.numeric(age)) %>%
+  mutate(age_cat = case_when(
+    (.$age<=31)==TRUE ~ "18-31",
+    (.$age>31)==TRUE ~ "32_plus"))
+d[,c("age", "age_cat")]
+
+# add political category
+d = d %>%
+  mutate(political_ideology = as.factor(political_ideology)) %>%
+  mutate(politic_cat = case_when(
+    (.$political_ideology == "Slightly conservative" | .$political_ideology == "Moderately convservative" | .$political_ideology == "Strong conservative")==TRUE ~ "conservative",
+    (.$political_ideology == "Slightly liberal" | .$political_ideology == "Moderate liberal" | .$political_ideology == "Strong liberal")==TRUE ~ "liberal",
+    (.$political_ideology == "Neutral") == TRUE ~ "neutral"))
+d[,c("political_ideology", "politic_cat")]
+
+# how many participants in total
+length(unique(d$participant_id))
+
+# add the sign of agents' emotional rating
+d = d %>%
+  mutate(agent_rating_sign = ifelse(agent_rating >=0, "positive rating", "negative rating"))
+d$agent_absRat = abs (d$agent_rating)
+d$subject_absRat = abs (d$subject_rating)
+
+# add two table of kept-only and eliminate-only agents
+d_kept <- d %>% 
+      filter(kept == 'kept')
+d_eliminate <- d %>%
+  filter(kept == 'eliminate')
+
+# add columns of agent comments containing "lonely" and "popular"
+d$agent_withlonely = ifelse(grepl("lone",d$agent_response), 1, 0)
+d$agent_withpopular = ifelse(grepl("pop", d$agent_response), 1, 0)
+
+# create popularity coefficient
+r = glmer(kept ~ agent_liking + (agent_liking | participant_id), family = binomial, data = d)
+
+d_coef <- coef(r)$participant_id
+
+d_coef <- d_coef %>% 
+  rownames_to_column(., "participant_id") %>% 
+  dplyr::select(participant_id, agent_liking) %>% 
+  rename(per_person_kept = agent_liking)
+
+p <- d_coef %>%
+  ggplot( aes(x=per_person_kept)) +
+    theme_bw()+
+    geom_histogram( color="#e9ecef", alpha=0.6, , position="dodge") +
+    scale_fill_manual(values=c("#69b3a2", "#404080")) +
+    #theme_ipsum() +
+    labs(x = "Popularity coefficient", y = "Count") ;p
+
+nm <- "popularity_coef"
+d[nm] <- lapply(nm, function(x) d_coef[["per_person_kept"]][match(d$participant_id, d_coef$participant_id)])
+```
+
+
+### Descriptives
+```{r Descriptives of demographics}
+
+des = d %>%
+  group_by(participant_id)%>%
+  slice(1)
+
+# age stats
+mean(des$age)
+sd(des$age)
+range(des$age)
+d_age = d %>%
+  dplyr::select(participant_id, age, age_cat,gender) 
+d_age = distinct(d_age)
+ggplot(d_age, aes(x = `age`)) +
+        geom_bar() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# gender stats
+table(des$gender)
+table(des$race_eth)
+d_gender = d %>%
+  dplyr::select(participant_id, age, age_cat,gender) 
+d_gender = distinct(d_gender)
+ggplot(d_gender, aes(x = `gender`)) +
+        geom_bar() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# loneliness stats
+ggplot(d, aes(y = .loneliness, color = lonely_cat, 
+                     fill = lonely_cat, x = lonely_cat)) + geom_point(alpha = 0.3) + geom_jitter()
+p <- des %>%
+  ggplot( aes(x=.loneliness)) +
+    theme_bw()+
+    geom_histogram( color="#e9ecef", alpha=0.6, , position="dodge") +
+    scale_fill_manual(values=c("#69b3a2", "#404080")) +
+    #theme_ipsum() +
+    labs(x = "Lonelness", y = "Count") ;p
+median (des$.loneliness)
+table(des$lonely_cat)
+
+
+sd(des$popularity_ratingappealing)
+```
+
+
+
+### H1 Analysis (Are lonely individuals more attracted to popular others)
+
+#### homophily
+```{r homophily}
+r = lmer(rating_dist ~ kept + (1|participant_id), data = d); summary(r)
+# significant - people tend to choose peers who rate artworks more similarly
+
+```
+
+#### homophily & loneliness
+```{r homophily and loneliness}
+r = glmer(kept ~ rating_dist*.loneliness + (1|participant_id), family = "binomial",data = d); summary(r)
+barGraph (d, "rating_dist","lonely_cat","kept","homophily & loneliness", "","rating distance")
+```
+
+#### popularity
+```{r popularity}
+r = glmer(kept ~ agent_liking + (1|participant_id),family = binomial, data = d); summary(r)
+r.squaredGLMM(r)
+confint(r)
+# graph
+lineGraph  (d, "agent_liking","kept","trial","popularity effect", "trials","popularity")
+p<-ggplot(data=d, aes(x=kept, y=agent_liking)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  coord_cartesian(ylim = c(2700000, 2800000)) + 
+  theme_minimal()
+p+ xlab(" ") + ylab("popularity")
+```
+
+#### popularity and loneliness (H1)
+```{r popularity_loneliness}
+r = glmer(kept ~ agent_liking*.loneliness + (1|participant_id), family = "binomial",data = d); summary(r)
+
+# significant - the more lonely people are, the more they tend to keep popular peers
+r.squaredGLMM(r)
+# graph
+barGraph  (d, "agent_liking","lonely_cat","kept","popularity & loneliness", "","popularity")
+
+#library(hrbrthemes)
+lineGraph (d, "agent_liking","lonely_cat","kept","", "Participant Loneliness","Peer Popularity")
+```
+
+### Exploratory Analysis
+#### within trial effects 
+```{r setting up within trial effects }
+s=d%>%
+  filter(kept =="kept")%>%
+  #filter(trial <4) %>%
+  dplyr::select(participant_id,
+         trial, 
+         agents_names,
+         agent_rating,
+         kept, 
+         kept_1_response_liking, 
+         kept_2_response_liking, kept_3_response_liking,subject_rating, lonely_cat, agent_liking, rating_dist)%>%
+  dplyr::group_by(participant_id,trial)%>%
+  #mutate(agentNumber = seq(1:3)) %>%
+  ungroup()%>%
+  dplyr::group_by(participant_id)%>%#, agentNumber)%>%
+  arrange(participant_id,trial)
+
+
+s = s %>%
+  #mutate(like_repeat = ifelse(kept_1_response_liking == kept_2_response_liking | kept_1_response_liking == kept_3_response_liking | kept_3_response_liking == kept_2_response_liking, 1,0))%>%
+  dplyr::mutate(kept_order = ifelse(agent_liking == kept_1_response_liking, 1, ifelse(agent_liking == kept_2_response_liking, 2,3)))%>%
+  dplyr::mutate(kept_order = as.factor(kept_order))
+
+p <- ggplot(s, aes(y = agent_liking, x = trial, color = kept_order)) +
+  #geom_point(alpha=0.4) +
+  geom_smooth(method='auto')+ 
+  facet_wrap(~lonely_cat)+
+    theme_bw()+
+    theme(plot.title = element_text(hjust=0.5,size = rel(1.5)),
+          axis.title.y = element_text(face="bold",  size=14),
+          axis.text.x  = element_text( vjust=0.5, size=12),
+          axis.text.y  = element_text( vjust=0.5, size=12),
+          axis.title.x = element_text( vjust=0.5, size=18)) +
+  xlab("Trial") + ylab("Popularity"); p
+
+barGraph2(s, "agent_liking","kept_order","lonely_cat","within trial", "","popularity")
+```
+
+#### correlation between loneliness and other measures
+
+##### lonelinss & my impression of the agent who has more average likes
+```{r loneliness and popular agent}
+d_moderate = d %>%
+  dplyr::select(.loneliness, pop_agent_popularity, pop_agent_positivity, pop_agent_interesting, pop_agent_like, pop_agent_ratingsimilar, pop_agent_likesimilar)
+d_moderate = distinct(d_moderate)
+d_cor = rcorr(as.matrix(d_moderate), type=c("pearson"))
+a = corrplot(d_cor$r, tl.cex = 0.8, order = "alphabet",p.mat=d_cor$P, insig="blank", method = "color", diag = FALSE, type = "upper",number.cex = 0.8,
+         addCoef.col = "black", # Add coefficient of correlation 
+         tl.col="black")  # Text label color and rotation
+```
+
+##### lonelinss & my impression of the agent who has less average likes
+```{r loneliness and non-popular agent}
+d_moderate = d %>%
+  dplyr::select(.loneliness, nonpop_agent_popularity, nonpop_agent_positivity, nonpop_agent_interesting, nonpop_agent_like, nonpop_agent_ratingsimilar, nonpop_agent_likesimilar)
+d_moderate = distinct(d_moderate)
+d_cor = rcorr(as.matrix(d_moderate), type=c("pearson"))
+b = corrplot(d_cor$r, tl.cex = 0.8, order = "alphabet",p.mat=d_cor$P, insig="blank", method = "color", diag = FALSE, type = "upper",number.cex = 0.8,
+         addCoef.col = "black", # Add coefficient of correlation 
+         tl.col="black")  # Text label color and rotation
+
+```
+
+##### loneliness & do I see myself as popular
+```{r loneliness and self perception}
+d_moderate = d %>%
+  dplyr::select(.loneliness, popularity_selfpopular, popularity_attractpopular, popularity_interetpopular, popularity_wishpopular, popularity_commentpopular, popularity_commentinteresting, popularity_ratingappealing)
+d_moderate = distinct(d_moderate)
+d_cor = rcorr(as.matrix(d_moderate), type=c("pearson"))
+corrplot(d_cor$r, tl.cex = 0.8, order = "alphabet",p.mat=d_cor$P, insig="blank", method = "color", diag = FALSE, type = "upper",number.cex = 0.8,
+         addCoef.col = "black", # Add coefficient of correlation 
+         tl.col="black")  # Text label color and rotation
+```
+
+##### attraction to popularity & do I see myself as popular
+```{r attration to popularity and self perception}
+popularity_cor = d %>%
+  dplyr::select(popularity_coef, popularity_selfpopular, popularity_attractpopular, popularity_interetpopular, popularity_wishpopular, popularity_commentpopular, popularity_commentinteresting, popularity_ratingappealing)
+d_cor = rcorr(as.matrix(popularity_cor), type=c("pearson"))
+corrplot(d_cor$r, tl.cex = 0.8, order = "alphabet",p.mat=d_cor$P, insig="blank", method = "color", diag = FALSE, type = "upper",number.cex = 0.8,
+         addCoef.col = "black", # Add coefficient of correlation 
+         tl.col="black")  # Text label color and rotation
+```
+
+##### attraction to popularity & my impression of the agent who has more average likes
+```{r attraction to popularity and popular agent}
+popularity_cor = d %>%
+  dplyr::select(popularity_coef, pop_agent_popularity, pop_agent_positivity, pop_agent_interesting, pop_agent_like, pop_agent_ratingsimilar, pop_agent_likesimilar)
+d_cor = rcorr(as.matrix(popularity_cor), type=c("pearson"))
+corrplot(d_cor$r, tl.cex = 0.8, order = "alphabet",p.mat=d_cor$P, insig="blank", method = "color", diag = FALSE, type = "upper",number.cex = 0.8,
+         addCoef.col = "black", # Add coefficient of correlation 
+         tl.col="black")  # Text label color and rotation
+```
+
+##### attraction to popularity & my impression of the agent who has less average likes
+```{r attraction to popularity and non-popular agent}
+popularity_cor = d %>%
+  dplyr::select(popularity_coef, nonpop_agent_popularity, nonpop_agent_positivity, nonpop_agent_interesting, nonpop_agent_like, nonpop_agent_ratingsimilar, nonpop_agent_likesimilar)
+d_cor = rcorr(as.matrix(popularity_cor), type=c("pearson"))
+corrplot(d_cor$r, tl.cex = 0.8, order = "alphabet",p.mat=d_cor$P, insig="blank", method = "color", diag = FALSE, type = "upper",number.cex = 0.8,
+         addCoef.col = "black", # Add coefficient of correlation 
+         tl.col="black")  # Text label color and rotation
+```
+
+##### combined correlation
+```{r combined correlation}
+# general correlation
+d_moderate = d %>%
+  dplyr::select(.loneliness, popularity_coef, pop_agent_popularity, pop_agent_positivity, pop_agent_interesting, pop_agent_like, pop_agent_ratingsimilar, pop_agent_likesimilar, nonpop_agent_popularity, nonpop_agent_positivity, nonpop_agent_interesting, nonpop_agent_like, nonpop_agent_ratingsimilar, nonpop_agent_likesimilar, popularity_selfpopular, popularity_attractpopular, popularity_interetpopular, popularity_wishpopular, popularity_commentpopular, popularity_commentinteresting, popularity_ratingappealing)
+d_moderate = distinct(d_moderate)
+d_cor = rcorr(as.matrix(d_moderate), type=c("pearson"))
+format_cor = function(cor, p) {
+  stars = ifelse(p < 0.001, "***", ifelse(p < 0.01, "**", ifelse(p < 0.05, "*", "")))
+  formatted = sprintf("%.2f%s", cor, stars)
+  formatted[formatted == "1.00"] = ""  # Remove diagonal
+  return(formatted)
+}
+cor_matrix = matrix(format_cor(d_cor$r, d_cor$P), nrow=21)
+colnames(cor_matrix) = rownames(cor_matrix) = colnames(d_moderate)
+cor_table = as.data.frame(cor_matrix)
+cor_table = cbind(Variable = rownames(cor_table), cor_table)
+kable(cor_table, format = "markdown", caption = "Correlation Matrix", align = 'c')
+#write.csv(cor_table, "correlation_table.csv", row.names = FALSE)
+
+means = sapply(d_moderate, mean, na.rm = TRUE)
+sds = sapply(d_moderate, sd, na.rm = TRUE)
+
+# Add means and SDs to the correlation table
+cor_table = cor_table %>%
+  dplyr::mutate(
+    Variable = rownames(cor_table),
+    Mean = sprintf("%.2f", means),
+    SD = sprintf("%.2f", sds)
+  ) %>%
+  dplyr::select(Variable, Mean, SD, everything())
+
+# Save as CSV
+#write.csv(cor_table, "correlation_table_with_means_sds.csv", row.names = FALSE)
+```
+
+#### mediation analysis
+```{r}
+
+# List of mediators
+mediators <- c(
+  "popularity_selfpopular", 
+  "popularity_commentpopular", 
+  "popularity_commentinteresting",
+  "popularity_wishpopular", 
+  "pop_agent_ratingsimilar", 
+  "pop_agent_likesimilar"
+)
+med_model <- lm(popularity_selfpopular ~ .loneliness, data = d)
+# Fit the outcome model
+out_model <- lm(popularity_coef ~ .loneliness + popularity_selfpopular, data = d)
+# Run the mediation analysis with bootstrapping
+med_result <- mediate(med_model, out_model, treat = ".loneliness", mediator = "popularity_selfpopular", boot = TRUE, sims = 5000)
+summary(med_result)
+
+med_model <- lm(pop_agent_ratingsimilar ~ .loneliness, data = d)
+# Fit the outcome model
+out_model <- lm(popularity_coef ~ .loneliness + pop_agent_ratingsimilar, data = d)
+# Run the mediation analysis with bootstrapping
+med_result <- mediate(med_model, out_model, treat = ".loneliness", mediator = "pop_agent_ratingsimilar", boot = TRUE, sims = 5000)
+summary(med_result)
+
+med_model <- lm(pop_agent_likesimilar ~ .loneliness, data = d)
+# Fit the outcome model
+out_model <- lm(popularity_coef ~ .loneliness + pop_agent_likesimilar, data = d)
+# Run the mediation analysis with bootstrapping
+med_result <- mediate(med_model, out_model, treat = ".loneliness", mediator = "pop_agent_likesimilar", boot = TRUE, sims = 5000)
+summary(med_result)
+
+med_model <- lm(nonpop_agent_ratingsimilar ~ .loneliness, data = d)
+# Fit the outcome model
+out_model <- lm(popularity_coef ~ .loneliness + nonpop_agent_ratingsimilar, data = d)
+# Run the mediation analysis with bootstrapping
+med_result <- mediate(med_model, out_model, treat = ".loneliness", mediator = "nonpop_agent_ratingsimilar", boot = TRUE, sims = 5000)
+summary(med_result)
+
+med_model <- lm(nonpop_agent_likesimilar ~ .loneliness, data = d)
+# Fit the outcome model
+out_model <- lm(popularity_coef ~ .loneliness + nonpop_agent_likesimilar, data = d)
+# Run the mediation analysis with bootstrapping
+med_result <- mediate(med_model, out_model, treat = ".loneliness", mediator = "nonpop_agent_likesimilar", boot = TRUE, sims = 5000)
+summary(med_result)
+
+med_model <- lm(popularity_wishpopular ~ .loneliness, data = d)
+# Fit the outcome model
+out_model <- lm(popularity_coef ~ .loneliness + popularity_wishpopular, data = d)
+# Run the mediation analysis with bootstrapping
+med_result <- mediate(med_model, out_model, treat = ".loneliness", mediator = "popularity_wishpopular", boot = TRUE, sims = 5000)
+summary(med_result)
+```
+
+
+##### attractive to popularity coefficient & do i see myself as popular
+```{r}
+## lonely & attractive to popularity coefficient & do i see myself as popular
+r = lmer(popularity_coef ~ popularity_selfpopular * .loneliness + (1|participant_id), data = d); summary(r)
+r = lmer(popularity_coef ~ .loneliness * popularity_selfpopular + (1|participant_id), data = d); summary(r)
+# SIG
+lineGraph (d, "popularity_coef","lonely_cat","popularity_selfpopular","", "How much do I see myself as popular", "Coefficient of attractiveness to popularity")
+ggplot(d, aes(x = popularity_selfpopular, y = popularity_coef, color = lonely_cat, fill = lonely_cat))+ 
+  geom_point(alpha = 0.3) + 
+  geom_smooth(method=lm, se=FALSE) 
+```
+
+##### attractive to popularity coefficient & to what extent are you interested in popular people
+```{r}
+r = lmer(popularity_coef ~ popularity_interetpopular + (1|participant_id), data = d); summary(r)
+# SIG
+ggplot(d, aes(x = popularity_interetpopular, y = popularity_coef)) + 
+  geom_point(alpha = 0.7) + 
+  geom_smooth(method=lm, se=FALSE) 
+
+## lonely
+r = lmer(popularity_coef ~ popularity_interetpopular * .loneliness + (1|participant_id), data = d); summary(r)
+# SIG
+lineGraph (d, "popularity_coef","lonely_cat","popularity_interetpopular","", "Am I interested in popular people", "Coefficient of attractiveness to popularity")
+ggplot(d, aes(x = popularity_interetpopular, y = popularity_coef, color = lonely_cat, fill = lonely_cat))+ 
+  geom_point(alpha = 0.3) + 
+  geom_smooth(method=lm, se=FALSE) 
+```
+
+
+
+### Power Analysis 
+
+```{r Power analysis}
+
+
+set.seed(2532)
+
+d$participant_id <- as.factor(d$participant_id)
+PowerModel = glmer(kept ~ agent_liking * .loneliness + (1|participant_id), 
+                  family=binomial, data=d,
+                  control=glmerControl(optimizer="bobyqa"))
+extended_model <- extend(PowerModel, along="participant_id", n=300)
+pc <- powerCurve(extended_model,
+                test = fixed("agent_liking:.loneliness"), 
+                nsim = 200, 
+                along = "participant_id") 
+pc
+#Power for predictor 'agent_liking:.loneliness', (95% confidence interval),
+#by number of levels in participant_id:
+#      3:  4.00% ( 1.74,  7.73) - 540 rows
+#     36: 13.00% ( 8.67, 18.47) - 6480 rows
+#     69: 25.50% (19.61, 32.13) - 12420 rows
+#    102: 30.50% (24.20, 37.39) - 18360 rows
+#    135: 45.00% (37.98, 52.18) - 24300 rows
+#    168: 54.50% (47.33, 61.54) - 30240 rows
+#    201: 66.50% (59.50, 73.00) - 36180 rows
+#    234: 73.00% (66.28, 79.02) - 42120 rows
+#    267: 75.00% (68.40, 80.84) - 48060 rows
+#    300: 79.50% (73.23, 84.87) - 54000 rows
+plot(pc)
+
+```

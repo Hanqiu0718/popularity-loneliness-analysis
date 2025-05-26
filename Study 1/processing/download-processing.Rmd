@@ -1,0 +1,280 @@
+---
+title: "Popularity and Loneliness Study 1 Data Processing"
+output: html_notebook
+
+This code tutorial does three things:
+  
+  1. Downloads experiment data files from AWS
+  2. Selects the incomplete files based on file size
+  3. Moves the incomplete files to a new folder
+  
+If you are unable to run this code for any reason, you can also do this manually (without using the code). You will use Cyberduck to download data and sort through incomplete files by looking at file sizes. To do this manually, follow the tutorial here: https://github.com/GoldenbergLab/lab-helper-codes/blob/main/guides/aws/s3-tasks/download.md
+---
+We use groundhog (https://groundhogr.com/) to manage our packages. Groundhog makes sure that our package versions are consistent with the current date. This way, everyone will be using packages from the same date to prevent any issues related to package versioning in future analyses. 
+
+To use groundhog, please: 
+(1) make sure that you have the latest version of R/Rstudio installed 
+(2) install RTools
+(3) make sure you are in a new R Session
+
+The R Version used to create this file is: `R version 4.3.0 (2023-04-21 ucrt)`. You can change this out with your own version of R if you are using this template to create your own analysis. If you are reproducing another person's analysis, please download the version of R used by the previous person to ensure a proper reproduction of the code.
+
+You can identify your version of R by typing `version` into the R Console
+
+You can switch your R version by pressing `Tools` > `Global Options` > `R Version`
+
+```{r libraries}
+
+library("groundhog")
+
+
+# put all packages in and call groundhog
+pkgs <- c(
+    "aws.s3",
+    "tidyverse", 'Rmisc', 'tidyverse', 'hablar',
+               'patchwork', 'network', 'cowplot', # figures
+               'effectsize', 'parameters', 'performance', 'lmerTest', # regression models
+               'lsa','interactions', # cosine
+               'MuMIn','hrbrthemes', "patchwork"
+    )
+
+pkgs_all <- c(pkgs)
+
+# call groundhog. Change out the date for today's date (unless you are running an old analysis)
+groundhog.library(pkgs_all, "2025-04-09")
+
+```
+
+
+If this line of code does not run, you can alternatively download the data via Cyberduck and manually move the raw data objects into the data folder. Tutorial here: https://github.com/GoldenbergLab/lab-helper-codes/blob/main/guides/aws/s3-tasks/download.md
+
+paste the following code into the R Console to set AWS credentials. For AWS credentials, reach out to Amit or the lab manager.
+
+Sys.setenv("AWS_ACCESS_KEY_ID" = "your access key",
+       "AWS_SECRET_ACCESS_KEY" = "your secret access key",
+        "AWS_DEFAULT_REGION" = "us-east-1")
+
+
+```{r download data and examine file sizes for cutoff point}
+
+## Download raw data objects and put them into the "data" folder
+
+#Provides a list of all of the buckets in the list 
+bucketlist("s3://task-data-raw/")
+
+#define your aws-s3 folder
+aws_folder ="popularity-loneliness-hanqiu-may-25/Study 1/"
+
+dir.create("../data/raw", recursive = TRUE, showWarnings = FALSE)
+
+#download all the files from that folder to your raw library 
+system(paste0('aws s3 cp "s3://task-data-raw/', aws_folder, '" "../data/raw" --recursive'))
+```
+
+Process the data in the next few chunks. The final output of this data processing should be one long-format csv that contains one trial per line.
+
+```{r process data}
+# EDGELIST DATA #
+net <- read.csv('../data/raw/edgelist_fa19sp20.csv', header = T) %>%
+  filter(networkType=='closeFrds') %>% # filter by network type & Term
+  select(-networkType)
+
+# TRAIT DATA #
+trait <- read.csv('../data/raw/df.traitNet_transformed_fa19sp20.csv', header = T) %>% 
+  # select relevant variables 
+  select(PID,
+         empathy_meanFactor_fa19,
+         empathy_meanFactor_sp20,
+         ntb_meanFactor_fa19,
+         socEmo_meanFactor_fa19,
+         socEmo_meanFactor_sp20,
+         # loneliness measures
+         loneliness_1_fa19, loneliness_4_fa19, loneliness_5_fa19, 
+         loneliness_1_sp20, loneliness_4_sp20, loneliness_5_sp20,
+         # TIPI measures 
+         TIPI_Extra_fa19, TIPI_Criti_fa19, TIPI_Depen_fa19, TIPI_Anx_fa19, 
+         TIPI_Open_fa19, TIPI_Reserv_fa19, TIPI_Symp_fa19, TIPI_Disorg_fa19, 
+         TIPI_EmoSta_fa19, TIPI_Conven_fa19, TIPI_Extra_sp20, TIPI_Criti_sp20,
+         TIPI_Depen_sp20, TIPI_Anx_sp20, TIPI_Open_sp20, TIPI_Reserv_sp20,
+         TIPI_Symp_sp20, TIPI_Disorg_sp20, TIPI_EmoSta_sp20, TIPI_Conven_sp20,
+         # centrality measures
+         in_degree_centrality_closeFrds_fa19, out_degree_centrality_closeFrds_fa19, 
+         in_degree_centrality_closeFrds_sp20, out_degree_centrality_closeFrds_sp20,
+         in_degree_centrality_liked_fa19, out_degree_centrality_liked_fa19) %>% 
+  # create mean loneliness measure
+  mutate(lone_fa19 = rowMeans(select(., loneliness_1_fa19:loneliness_5_fa19)),
+         lone_sp20 = rowMeans(select(., loneliness_1_sp20:loneliness_5_sp20))) %>%
+  # Replace NaN values (from all NAs) with NA
+  mutate(
+    lone_fa19 = ifelse(is.nan(lone_fa19), NA, lone_fa19),
+    lone_sp20 = ifelse(is.nan(lone_sp20), NA, lone_sp20)
+  ) 
+
+trait$TIPI_Criti_fa19 <- recode(trait$TIPI_Criti_fa19, '1' = 7, '2' = 6, '3' = 5, '4' = 4, '5' = 3, '6' = 2, '7' = 1)
+trait$TIPI_Criti_sp20 <- recode(trait$TIPI_Criti_sp20, '1' = 7, '2' = 6, '3' = 5, '4' = 4, '5' = 3, '6' = 2, '7' = 1)
+
+trait = trait %>%
+  mutate(agree_fa19 = (TIPI_Criti_fa19 + TIPI_Symp_fa19)/2,
+         agree_sp20 = (TIPI_Criti_sp20 + TIPI_Symp_sp20)/2) %>%
+# nest TIPI
+  nest(TIPI_fa19 = c(TIPI_Extra_fa19:TIPI_Conven_fa19),
+       TIPI_sp20 = c(TIPI_Extra_sp20:TIPI_Conven_sp20)) %>% 
+  select(!contains('loneliness') )
+
+# MERGED DATA #
+both <- left_join(net, trait, by = 'PID') # join w/ ego's PA
+
+both <- both %>%
+  # join w/ alters' pa 
+  left_join(trait, by = c('nom' = 'PID')) %>%
+  # change variables names 
+  select(term,
+         # ego 
+         ego = PID,
+         agree19Ego = agree_fa19.x,
+         agree19Alter = agree_fa19.y,
+         agree20Ego = agree_sp20.x,
+         agree20Alter = agree_sp20.y,
+         empathy19Ego = empathy_meanFactor_fa19.x,
+         empathy19Alter = empathy_meanFactor_fa19.y,
+         empathy20Ego = empathy_meanFactor_sp20.x,
+         empathy20Alter = empathy_meanFactor_sp20.y,
+         socialemotionallity19Ego = socEmo_meanFactor_fa19.x,
+         socialemotionallity19Alter = socEmo_meanFactor_fa19.y,
+         socialemotionallity20Ego = socEmo_meanFactor_sp20.x,
+         socialemotionallity20Alter = socEmo_meanFactor_sp20.y,
+         needtobelong19Ego = ntb_meanFactor_fa19.x,
+         needtobelong19Alter = ntb_meanFactor_fa19.y,
+         tipi19Ego = TIPI_fa19.x, tipi20Ego = TIPI_sp20.x, # TIPI
+         lone19Ego = lone_fa19.x, lone20Ego = lone_sp20.x, # lone
+         in19Ego = in_degree_centrality_closeFrds_fa19.x, in20Ego = in_degree_centrality_closeFrds_sp20.x, # in-centrality
+         out19Ego = out_degree_centrality_closeFrds_fa19.x, out20Ego = out_degree_centrality_closeFrds_sp20.x, # out-centrality
+         in19Ego_liked = in_degree_centrality_liked_fa19.x,
+         out19Ego_liked = out_degree_centrality_liked_fa19.x, 
+         # alter
+         alter = nom,
+         tipi19Alter = TIPI_fa19.y, tipi20Alter = TIPI_sp20.y, # TIPI
+         lone19Alter = lone_fa19.y, lone20Alter = lone_sp20.y, # lone
+         in19Alter = in_degree_centrality_closeFrds_fa19.y, in20Alter = in_degree_centrality_closeFrds_sp20.y, # in-centrality
+         out19Alter = out_degree_centrality_closeFrds_fa19.y, out20Alter = out_degree_centrality_closeFrds_sp20.y,
+         in19Alter_liked = in_degree_centrality_liked_fa19.y,
+         out19Alter_liked = out_degree_centrality_liked_fa19.y) %>%
+  add_column(needtobelong20Ego = 0, 
+         needtobelong20Alter = 0,
+         in20Alter_liked = 0,
+         out20Alter_liked = 0,
+         in20Ego_liked = 0,
+         out20Ego_liked = 0) 
+
+
+# FALL 2019 DATA # 
+fa19 <- both %>% 
+  filter(term=='fa19') %>% 
+  select(term, ego, alter, contains('19')) 
+
+names(fa19) <- gsub('19', '', x = names(fa19))
+#fa19$binary = ifelse(fa19$loneEgo <= mean(fa19$loneEgo, na.rm = T), 0, 1 )
+#table(fa19$binary)
+
+# SPRING 2020 DATA #
+sp20 <- both %>% 
+  filter(term=='sp20') %>% 
+  select(term, ego, alter, contains('20'))
+
+names(sp20) <- gsub('20', '', x = names(sp20))
+#sp20$binary = ifelse(sp20$loneEgo <= mean(sp20$loneEgo, na.rm = T), 0, 1 )
+#table(sp20$binary)
+#summary(sp20$loneEgo)
+
+# fall data
+fa19 <- fa19 %>% 
+  mutate(loneBinEgo = ifelse(loneEgo <= median(loneEgo, na.rm = T), 0, 1),
+         loneEgo = scale(loneEgo),
+         loneBinAlter = ifelse(loneAlter <= median(loneAlter, na.rm = T), 0, 1),
+         loneAlter = scale(loneAlter)) %>% 
+  group_by(ego) %>% 
+  mutate(loneBinEgo = factor(loneBinEgo, levels = c(0, 1),
+                          labels = c('NL', 'L')),
+         loneBinAlter = factor(loneBinAlter, levels = c(0, 1),
+                          labels = c('NL', 'L'))) %>% 
+  ungroup
+
+
+# spring data
+sp20 <- sp20 %>% 
+  mutate(loneBinEgo = ifelse(loneEgo <= median(loneEgo, na.rm = T), 0, 1),
+         loneEgo = scale(loneEgo),
+         loneBinAlter = ifelse(loneAlter <= median(loneAlter, na.rm = T), 0, 1),
+         loneAlter = scale(loneAlter)) %>% 
+  group_by(ego) %>% 
+  mutate(loneBinEgo = factor(loneBinEgo, levels = c(0, 1),
+                          labels = c('NL', 'L')),
+         loneBinAlter = factor(loneBinAlter, levels = c(0, 1),
+                          labels = c('NL', 'L'))) %>% 
+  ungroup
+
+
+# BOTH TermS # 
+both2 <- rbind(fa19, sp20)
+
+both2A <- both2 %>% 
+  select(term, ego, alter)
+
+both2B <- both2A
+
+list <- left_join(both2A, both2B, by = c('alter' = 'ego',
+                                        'term' = 'term'))
+
+final <- list %>% 
+  mutate(recp = ifelse(ego==alter.y, 1, 0)) %>% 
+  filter(recp==1) %>% 
+  select(term, ego, alter, recp) %>% distinct
+
+
+# DATA W/O NA VALUES #
+data <- both2 %>% 
+  left_join(., final) %>% group_by(term) %>% 
+  dplyr::mutate(recp = replace_na(recp, 0)) %>% 
+  ungroup %>%
+  group_by(term, ego) %>% 
+  dplyr::mutate(n = n(),
+         term = factor(term, levels = c('fa19', 'sp20'),
+                       labels = c('Fall 2019', 'Spring 2020')),
+         recpSum = sum(recp),
+         recpPer = (sum(recp)/n)) %>% 
+  ungroup
+
+lineGraph = function (data, outcome,group1,group2,title, xtitle,ytitle){
+  dfc=summarySE(data, measurevar=outcome,
+                groupvars=c(group1,group2), na.rm = T)
+  print(dfc)
+  dfc$high = dfc[,4]+dfc[,7]
+  dfc$low = dfc[,4]-dfc[,7]
+  pd <- position_dodge(0)
+  ggplot(dfc,aes_string(x=group2, y=outcome ,fill = group1, colour =group1))+
+    geom_errorbar(aes(ymin=low, ymax=high), width=.1)+
+    geom_line( aes_string(linetype= group1, group=group1),size = .5)+
+    #facet_wrap(as.formula(paste("~", group1)),nrow=2)+
+    geom_point()+
+    theme_bw()+
+    theme(plot.title = element_text(hjust=0.5,size = rel(1.5)),
+          axis.title.y = element_text(face="bold",  size=14),
+          axis.text.x  = element_text( vjust=0.5, size=18),
+          axis.text.y  = element_text( vjust=0.5, size=12),
+          axis.title.x = element_text( vjust=0.5, size=18)) +
+    labs(title = title,
+          x = xtitle, 
+          y = ytitle)
+}
+
+data = data %>% dplyr::rename(Term = "term")
+
+cat("Total participants in final dataset:", length(unique(data$ego)), "\n")
+#1379
+
+data_fixed <- data %>%
+  select(-tipiEgo, -tipiAlter)
+
+write.csv(data_fixed, "../data/raw/processed_data.csv")
+```
+
