@@ -209,77 +209,36 @@ lone_stats <- data.frame(
 cat("\nLoneliness Statistics (Z-scores):\n")
 print(lone_stats)
 
-# Calculate popularity ratio (indegree/outdegree) for alters in both terms
-
-# Calculate in-degree (number of nominations received) for each participant
+# Calculate popularity as in-degree (number of nominations received) for each participant
 # by counting how many times they appear as an alter
-indegree_counts <- data %>%
+popularity_data <- data %>%
   group_by(Term, alter) %>%
-  dplyr::summarise(indegree = n(), .groups = "drop")
-
-# Calculate out-degree (number of nominations made) for each participant
-# by counting how many alters each ego nominated
-outdegree_counts <- data %>%
-  group_by(Term, ego) %>%
-  dplyr::summarise(outdegree = n(), .groups = "drop")
-
-# Join the indegree and outdegree counts
-# Rename columns to match the join
-indegree_counts <- indegree_counts %>%
-  dplyr::rename(participant = alter)
-
-outdegree_counts <- outdegree_counts %>%
-  dplyr::rename(participant = ego)
-
-# Join the datasets
-popularity_data <- full_join(indegree_counts, outdegree_counts, by = c("Term", "participant"))
-
-# Correctly handle missing values:
-# - Participants who nominated others but weren't nominated: indegree = 0
-# - Participants who received nominations but didn't nominate anyone: outdegree = NA
-popularity_data <- popularity_data %>%
-  mutate(
-    indegree = ifelse(is.na(indegree), 0, indegree),
-    # Keep outdegree as NA if it's missing - don't replace with 0
-  )
-
-# Calculate popularity ratio (indegree/outdegree)
-# Only for participants with valid outdegree values
-popularity_data <- popularity_data %>%
-  mutate(
-    popularity_ratio = case_when(
-      is.na(outdegree) ~ NA_real_,  # If they didn't nominate anyone, ratio is NA
-      outdegree == 0 ~ NA_real_,    # Avoid division by zero
-      TRUE ~ indegree / outdegree   # Normal case: calculate ratio
-    )
-  )
+  dplyr::summarise(indegree = n(), .groups = "drop") 
 
 # Calculate statistics by term
 popularity_stats <- popularity_data %>%
-  filter(!is.na(popularity_ratio)) %>% # Remove NA values
   group_by(Term) %>%
   dplyr::summarise(
-    mean_ratio = mean(popularity_ratio, na.rm = TRUE),
-    sd_ratio = sd(popularity_ratio, na.rm = TRUE),
-    median_ratio = median(popularity_ratio, na.rm = TRUE),
-    min_ratio = min(popularity_ratio, na.rm = TRUE),
-    max_ratio = max(popularity_ratio, na.rm = TRUE),
+    mean_indegree = mean(indegree, na.rm = TRUE),
+    sd_indegree = sd(indegree, na.rm = TRUE),
+    median_indegree = median(indegree, na.rm = TRUE),
+    min_indegree = min(indegree, na.rm = TRUE),
+    max_indegree = max(indegree, na.rm = TRUE),
     n = n()
   )
 
 # Print the results
-cat("Popularity Ratio Statistics (Indegree/Outdegree):\n")
+cat("Popularity Statistics (Indegree):\n")
 print(popularity_stats)
+
+data <- data %>%
+  left_join(popularity_data, by = c("Term" = "Term", "alter" = "alter"))
+
+data <- data %>%
+  dplyr::rename(alter_popularity = indegree)
 ```
 
 ```{r descriptive stats graphs}
-
-ggplot(data, aes(x = loneEgo, fill = Term)) +
-    geom_histogram(color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 0.5) + 
-    scale_fill_manual(values=c("#69b3a2", "#404080")) +
-    #geom_vline(aes(xintercept=mean(loneEgo)),  colour = "black", linetype = "dashed") +
-    theme_linedraw() + labs(x = "Ego's loneliness", y = "Count", title = "A", subtitle = "Distribution of Ego's Loneliness") + theme(plot.title = element_text(face = "bold"))
-
 data %>% 
   group_by(Term, ego) %>% 
   slice(1) %>% ungroup %>% 
@@ -338,51 +297,27 @@ p <- nominations_count %>%
     # Set better x-axis limits
     xlim(0, max(nominations_count$n) + 1)
 
-# Distribution of Alter's Popularity (Indegree/Outdegree ratio)
-# Calculate indegree (nominations received)
-indegree <- data %>%
-  group_by(Term, alter) %>%
-  dplyr::summarise(indegree = n(), .groups = "drop")
+# Distribution of Alter's Popularity (Indegree)
+unique_popularity <- data %>%
+  select(Term, alter, alter_popularity) %>%
+  distinct()
 
-# Calculate outdegree (nominations made)
-outdegree <- data %>%
-  group_by(Term, ego) %>%
-  dplyr::summarise(outdegree = n(), .groups = "drop") %>%
-  dplyr::rename(alter = ego)  # rename to match with indegree
-
-# Join to calculate popularity ratio
-popularity <- full_join(indegree, outdegree, by = c("Term", "alter"))
-
-# Handle missing values correctly:
-# - Replace NA indegree with 0 (participants who nominated others but weren't nominated)
-# - Keep NA outdegree as is (participants who received nominations but didn't nominate)
-popularity <- popularity %>%
-  mutate(
-    indegree = ifelse(is.na(indegree), 0, indegree),
-    # Calculate popularity ratio where possible
-    popularity_ratio = case_when(
-      is.na(outdegree) ~ NA_real_,  # If they didn't nominate anyone, ratio is NA
-      outdegree == 0 ~ NA_real_,    # Avoid division by zero
-      TRUE ~ indegree / outdegree   # Normal case: calculate ratio
-    )
-  )
-
-# Plot distribution of alter's popularity (indegree/outdegree ratio)
-q <- popularity %>%
-  filter(!is.na(popularity_ratio)) %>%
-  ggplot(aes(x=popularity_ratio, fill=Term)) +
-    geom_histogram(color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 0.2) +
+# Plot distribution of alter's popularity (indegree)
+q <- data %>%
+  filter(!is.na(alter_popularity)) %>%
+  ggplot(aes(x=alter_popularity, fill=Term)) +
+    geom_histogram(color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 0.5) +
     scale_fill_manual(values=c("#69b3a2", "#404080")) +
     # Add separate mean lines for each Term
-    geom_vline(data = popularity %>% 
-                 filter(!is.na(popularity_ratio)) %>%
+    geom_vline(data = unique_popularity  %>% 
+                 filter(!is.na(alter_popularity)) %>%
                  dplyr::group_by(Term) %>% 
-                 dplyr::summarise(mean_ratio = mean(popularity_ratio, na.rm=TRUE)),
-               aes(xintercept=mean_ratio, color=Term), 
+                 dplyr::summarise(mean = mean(alter_popularity, na.rm=TRUE)),
+               aes(xintercept=mean, color=Term), 
                linetype = "dashed", size=1) +
     scale_color_manual(values=c("#216843", "#202060")) +
     theme_linedraw() +
-    labs(x = "Indegree/Outdegree - Alter's popularity", 
+    labs(x = "Indegree - Alter's popularity", 
          y = "Frequency", 
          title = "B", 
          subtitle = "Distribution of Alter's Popularity") + 
@@ -402,18 +337,14 @@ combined_plot
 
 ### H1 Analysis: Do lonely egos tend to nominate more popular alters? 
 ```{r H1}
-# ratio of the number of be nominated by the number of nominating others as estimation of popularity
-data <- data %>%
-  left_join(
-    popularity %>% select(Term, alter, popularity_ratio),
-    by = c("Term", "alter")
-  )
+# alter indegree as estimation of popularity
+data$log_alter_received_nominations <- log1p(data$alter_popularity)
 
-r = lmer(popularity_ratio ~ loneEgo + (1|ego), data = data); summary(r)
+r <- lmer(log_alter_received_nominations ~ loneEgo + inEgo + (1|ego), data = data); summary(r)
 r.squaredGLMM(r)
 confint(r)
 
-p <- ggplot(data, aes(y = popularity_ratio, x = loneEgo, color = Term)) +
+p <- ggplot(data, aes(y = log_alter_received_nominations, x = loneEgo, color = Term)) +
   #geom_point(alpha=0.4) +
   geom_smooth(method = "lm", fill = "lightgray") + 
     theme_ipsum() +
@@ -424,7 +355,35 @@ p <- ggplot(data, aes(y = popularity_ratio, x = loneEgo, color = Term)) +
           axis.text.y  = element_text( vjust=0.5, size=12),
           axis.title.x = element_text(vjust=0.5, size=14)) +
   scale_color_manual(values=c("#69b3a2", "#404080")) +
-  xlab("Ego's loneliness") + ylab("Alter's popularity (indegree/outdegree)"); p
+  xlab("Ego's loneliness") + ylab("Alter's popularity"); p
+
+
+
+# Create a clean dataset for plotting
+plot_data <- data %>%
+  filter(!is.na(loneEgo) & !is.na(inEgo) & !is.na(log_alter_received_nominations))
+
+# Create partial regression plot by removing the effect of inEgo
+# First, get residuals after controlling for inEgo
+lm_x <- lm(loneEgo ~ inEgo, data = plot_data)
+lm_y <- lm(log_alter_received_nominations ~ inEgo, data = plot_data)
+
+plot_data$loneEgo_resid <- residuals(lm_x)
+plot_data$popularity_resid <- residuals(lm_y)
+
+p <- ggplot(plot_data, aes(y = popularity_resid, x = loneEgo_resid, color = Term)) +
+  geom_smooth(method = "lm", fill = "lightgray") + 
+  theme_ipsum() +
+  theme(plot.title = element_text(hjust=0.5,size = rel(1.5)),
+        axis.title.y = element_text(size=14),
+        axis.text.x  = element_text( vjust=0.5, size=12),
+        axis.text.y  = element_text( vjust=0.5, size=12),
+        axis.title.x = element_text(vjust=0.5, size=14)) +
+  scale_color_manual(values=c("#69b3a2", "#404080")) +
+  xlab("Ego's loneliness (residualized)") + 
+  ylab("Alter's popularity (residualized)")
+
+p
 ```
 
 ### Exploratory Analysis
@@ -462,7 +421,7 @@ a + b
 
 #### whether lonely people are reciprocated more or less by popular people.
 ```{r exploratory loneliness reciprocity}
-fit <- lmer(recpPer ~ loneEgo* popularity_ratio + (1|ego), data); summary(fit)
+fit <- lmer(recpPer ~ loneEgo* log_alter_received_nominations + (1|ego), data); summary(fit)
 r.squaredGLMM(fit)
 confint(fit)
 
@@ -500,11 +459,10 @@ data_with_saturation <- data %>%
             by = c("Term", "alter"))
 
 # Step 5: Check if popular alters are more saturated
-# Assuming you have a loneliness variable for egos called loneEgo
 popular_saturation <- data_with_saturation %>%
-  # Use popularity_ratio to determine if alter is popular (above median)
+  # Use alter_popularity to determine if alter is popular (above median)
   dplyr::group_by(Term) %>%
-  dplyr::mutate(is_popular = popularity_ratio > median(popularity_ratio, na.rm = TRUE)) %>%
+  dplyr::mutate(is_popular = alter_popularity > median(alter_popularity, na.rm = TRUE)) %>%
   ungroup() %>%
   # Check saturation rates by popularity
   group_by(Term, is_popular) %>%
@@ -530,11 +488,11 @@ network <- read.csv('../data/raw/edgeList_allNetworks.csv', header = T) %>%
   ungroup()
 data2 = merge(network, data, by = c("ego", "alter"))
 
-r = lmer(popularity_ratio ~ rank + (1|ego), data = data2); summary(r)
+r = lmer(log_alter_received_nominations ~ rank + (1|ego), data = data2); summary(r)
 r.squaredGLMM(r)
 confint(r)
 
-r = lmer(popularity_ratio ~ rank*loneEgo + (1|ego), data = data2); summary(r)
+r = lmer(log_alter_received_nominations ~ rank*loneEgo + (1|ego), data = data2); summary(r)
 r.squaredGLMM(r)
 confint(r)
 ```

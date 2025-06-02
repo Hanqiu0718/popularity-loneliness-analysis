@@ -525,12 +525,12 @@ df_agent$...4 = NULL
 # add agent-liking
 ```{r}
 
-df_agent <- read.csv("../data/raw/anonymized-data/df_agent.csv")
-df_agent$agent_number = seq(1:6)
-df_agent = df_agent %>%
+#df_agent <- read.csv("../data/raw/anonymized-data/df_agent.csv")
+#df_agent$agent_number = seq(1:6)
+#df_agent = df_agent %>%
   #mutate(agent_number = seq(1:6))%>%
-  dplyr::mutate(agent_liking = ifelse(agent_number ==1, agent_1_response_liking, ifelse(agent_number ==2, agent_2_response_liking,ifelse(agent_number ==3, agent_3_response_liking,ifelse(agent_number ==4, agent_4_response_liking,ifelse(agent_number ==5, agent_5_response_liking,ifelse(agent_number ==6, agent_6_response_liking, NA)))))))%>%
-  dplyr::select(-agent_number, -agent_1_response_liking, -agent_2_response_liking, -agent_3_response_liking, -agent_4_response_liking, -agent_5_response_liking, -agent_6_response_liking)
+#  dplyr::mutate(agent_liking = ifelse(agent_number ==1, agent_1_response_liking, ifelse(agent_number ==2, agent_2_response_liking,ifelse(agent_number ==3, agent_3_response_liking,ifelse(agent_number ==4, agent_4_response_liking,ifelse(agent_number ==5, agent_5_response_liking,ifelse(agent_number ==6, agent_6_response_liking, NA)))))))%>%
+#  dplyr::select(-agent_number, -agent_1_response_liking, -agent_2_response_liking, -agent_3_response_liking, -agent_4_response_liking, -agent_5_response_liking, -agent_6_response_liking)
 
 #write_rds(df_agent, "anonymized-data/df_agent.rds")
 #write_csv(df_agent, "anonymized-data/df_agent.csv")

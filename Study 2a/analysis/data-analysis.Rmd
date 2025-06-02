@@ -284,7 +284,6 @@ r.squaredGLMM(r)
 # graph
 barGraph  (d, "agent_liking","lonely_cat","kept","popularity & loneliness", "","popularity")
 
-#library(hrbrthemes)
 lineGraph (d, "agent_liking","lonely_cat","kept","", "Participant Loneliness","Peer Popularity")
 ```
 
